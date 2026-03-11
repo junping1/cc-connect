@@ -90,6 +90,12 @@ type MessageUpdater interface {
 	UpdateMessage(ctx context.Context, replyCtx any, content string) error
 }
 
+// ThinkingFormatter is an optional interface for platforms that support
+// special formatting for agent reasoning/thinking text (e.g. spoilers).
+type ThinkingFormatter interface {
+	FormatThinking(text string) string
+}
+
 // ButtonOption represents a clickable inline button.
 type ButtonOption struct {
 	Text string // display text on the button

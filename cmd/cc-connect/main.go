@@ -18,6 +18,7 @@ import (
 	ccconnect "github.com/chenhg5/cc-connect"
 	"github.com/chenhg5/cc-connect/config"
 	"github.com/chenhg5/cc-connect/core"
+	"github.com/chenhg5/cc-connect/core/artifact"
 	"github.com/chenhg5/cc-connect/daemon"
 
 	_ "github.com/chenhg5/cc-connect/agent/claudecode"
@@ -71,6 +72,9 @@ func main() {
 			return
 		case "relay":
 			runRelay(os.Args[2:])
+			return
+		case "artifact":
+			runArtifact(os.Args[2:])
 			return
 		case "daemon":
 			runDaemon(os.Args[2:])
@@ -478,6 +482,31 @@ func main() {
 		if cronSched != nil {
 			apiSrv.SetCronScheduler(cronSched)
 		}
+
+		// Start artifact server if enabled (default: enabled=true)
+		artCfg := cfg.Artifact
+		if !artCfg.Enabled && artCfg.Port == 0 && artCfg.BaseURL == "" && artCfg.DefaultTTL == 0 {
+			// No explicit config: use defaults (enabled by default)
+			artCfg.Enabled = true
+		}
+		if artCfg.Enabled {
+			artSrv := artifact.New(artifact.Config{
+				BaseURL:    artCfg.BaseURL,
+				Port:       artCfg.Port,
+				DefaultTTL: artCfg.DefaultTTL,
+			}, cfg.DataDir)
+			if err := artSrv.Start(); err != nil {
+				slog.Warn("artifact server failed to start", "error", err)
+			} else {
+				adapter := &artifactAdapter{srv: artSrv}
+				apiSrv.SetArtifactAPIServer(adapter)
+				for _, e := range engines {
+					e.SetArtifactServer(adapter)
+				}
+				slog.Info("artifact server started", "port", artCfg.Port)
+			}
+		}
+
 		apiSrv.Start()
 	}
 
@@ -805,4 +834,31 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 	slog.Info("config reloaded", "project", projName)
 	return result, nil
+}
+
+// artifactAdapter adapts *artifact.Server to core.ArtifactServer and core.ArtifactAPIServer.
+type artifactAdapter struct {
+	srv *artifact.Server
+}
+
+func (a *artifactAdapter) Allow(path string, ttl int) (string, error) {
+	return a.srv.Allow(path, ttl)
+}
+
+func (a *artifactAdapter) ListEntries() []core.ArtifactListEntry {
+	entries := a.srv.List()
+	result := make([]core.ArtifactListEntry, len(entries))
+	for i, e := range entries {
+		result[i] = core.ArtifactListEntry{
+			Token:   e.Token,
+			Path:    e.Path,
+			Expires: e.Expires,
+			URL:     a.srv.PublicURL(e.Token),
+		}
+	}
+	return result
+}
+
+func (a *artifactAdapter) Revoke(token string) {
+	a.srv.Revoke(token)
 }

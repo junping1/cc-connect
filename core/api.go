@@ -22,7 +22,23 @@ type APIServer struct {
 	engines    map[string]*Engine // project name → engine
 	cron       *CronScheduler
 	relay      *RelayManager
+	artifact   ArtifactAPIServer
 	mu         sync.RWMutex
+}
+
+// ArtifactAPIServer is the interface the API server uses to serve artifact operations.
+type ArtifactAPIServer interface {
+	Allow(path string, ttl int) (string, error)
+	ListEntries() []ArtifactListEntry
+	Revoke(token string)
+}
+
+// ArtifactListEntry is a JSON-serializable artifact entry for the API.
+type ArtifactListEntry struct {
+	Token   string    `json:"token"`
+	Path    string    `json:"path"`
+	Expires time.Time `json:"expires"`
+	URL     string    `json:"url"`
 }
 
 // SendRequest is the JSON body for POST /send.
@@ -63,6 +79,9 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	s.mux.HandleFunc("/relay/send", s.handleRelaySend)
 	s.mux.HandleFunc("/relay/bind", s.handleRelayBind)
 	s.mux.HandleFunc("/relay/binding", s.handleRelayBinding)
+	s.mux.HandleFunc("/artifact/allow", s.handleArtifactAllow)
+	s.mux.HandleFunc("/artifact/list", s.handleArtifactList)
+	s.mux.HandleFunc("/artifact/revoke", s.handleArtifactRevoke)
 
 	return s, nil
 }
@@ -90,6 +109,11 @@ func (s *APIServer) RelayManager() *RelayManager {
 
 func (s *APIServer) SetCronScheduler(cs *CronScheduler) {
 	s.cron = cs
+}
+
+// SetArtifactAPIServer wires an artifact server into the API server.
+func (s *APIServer) SetArtifactAPIServer(srv ArtifactAPIServer) {
+	s.artifact = srv
 }
 
 func (s *APIServer) Start() {
@@ -377,4 +401,79 @@ func (s *APIServer) handleRelayBinding(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(binding)
+}
+
+// ── Artifact API ───────────────────────────────────────────────
+
+func (s *APIServer) handleArtifactAllow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.artifact == nil {
+		http.Error(w, "artifact server not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+		TTL  int    `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	url, err := s.artifact.Allow(req.Path, req.TTL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"url": url})
+}
+
+func (s *APIServer) handleArtifactList(w http.ResponseWriter, r *http.Request) {
+	if s.artifact == nil {
+		http.Error(w, "artifact server not available", http.StatusServiceUnavailable)
+		return
+	}
+	entries := s.artifact.ListEntries()
+	if entries == nil {
+		entries = []ArtifactListEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func (s *APIServer) handleArtifactRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.artifact == nil {
+		http.Error(w, "artifact server not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	s.artifact.Revoke(req.Token)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

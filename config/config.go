@@ -31,6 +31,7 @@ type Config struct {
 	Quiet            *bool               `toml:"quiet,omitempty"`              // global default for quiet mode; project-level overrides this
 	Cron             CronConfig          `toml:"cron"`
 	IdleTimeoutMins  *int                `toml:"idle_timeout_mins,omitempty"`  // max minutes between agent events; 0 = no timeout; default 120
+	Artifact         ArtifactConfig      `toml:"artifact"`
 }
 
 // CronConfig controls cron job behavior.
@@ -146,6 +147,14 @@ type CommandConfig struct {
 
 type LogConfig struct {
 	Level string `toml:"level"`
+}
+
+// ArtifactConfig configures the built-in file-sharing HTTP server.
+type ArtifactConfig struct {
+	Enabled    bool   `toml:"enabled"`
+	BaseURL    string `toml:"base_url"`
+	Port       int    `toml:"port"`
+	DefaultTTL int    `toml:"default_ttl"` // seconds; default 3600
 }
 
 func Load(path string) (*Config, error) {

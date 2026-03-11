@@ -17,9 +17,34 @@ func MarkdownToTelegramHTML(md string) string {
 	inCodeBlock := false
 	codeLang := ""
 	var codeLines []string
+	var tableLines []string
+
+	flushTable := func(atIndex int) {
+		if len(tableLines) == 0 {
+			return
+		}
+		rendered := renderTablePre(tableLines)
+		b.WriteString("<pre>")
+		b.WriteString(escapeHTML(rendered))
+		b.WriteString("</pre>")
+		if atIndex < len(lines)-1 {
+			b.WriteByte('\n')
+		}
+		tableLines = nil
+	}
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+
+		// Table row detection: lines starting with "|"
+		if !inCodeBlock && strings.HasPrefix(trimmed, "|") {
+			tableLines = append(tableLines, trimmed)
+			continue
+		}
+		// Flush accumulated table when we hit a non-table line
+		if len(tableLines) > 0 {
+			flushTable(i)
+		}
 
 		if strings.HasPrefix(trimmed, "```") {
 			if !inCodeBlock {
@@ -72,6 +97,9 @@ func MarkdownToTelegramHTML(md string) string {
 		}
 	}
 
+	// Flush any trailing table
+	flushTable(len(lines))
+
 	// Handle unclosed code block
 	if inCodeBlock && len(codeLines) > 0 {
 		b.WriteString("<pre><code>")
@@ -81,6 +109,73 @@ func MarkdownToTelegramHTML(md string) string {
 
 	return b.String()
 }
+
+// renderTablePre converts markdown table rows into a plain-text aligned table
+// suitable for wrapping in a <pre> block.
+func renderTablePre(rows []string) string {
+	// Parse each row into cells
+	var parsed [][]string
+	for _, row := range rows {
+		// Skip separator rows (e.g. |---|:--|--:|)
+		stripped := strings.Trim(row, "|")
+		if reTableSeparator.MatchString(stripped) {
+			continue
+		}
+		parts := strings.Split(stripped, "|")
+		var cells []string
+		for _, p := range parts {
+			cells = append(cells, strings.TrimSpace(p))
+		}
+		parsed = append(parsed, cells)
+	}
+	if len(parsed) == 0 {
+		return ""
+	}
+
+	// Find max columns
+	maxCols := 0
+	for _, row := range parsed {
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+	}
+
+	// Calculate column widths
+	widths := make([]int, maxCols)
+	for _, row := range parsed {
+		for j, cell := range row {
+			if j < maxCols && len(cell) > widths[j] {
+				widths[j] = len(cell)
+			}
+		}
+	}
+
+	// Render rows
+	var sb strings.Builder
+	for rowIdx, row := range parsed {
+		for j := 0; j < maxCols; j++ {
+			cell := ""
+			if j < len(row) {
+				cell = row[j]
+			}
+			// Pad cell to column width (except last column)
+			if j < maxCols-1 {
+				sb.WriteString(cell)
+				for k := len(cell); k < widths[j]+2; k++ {
+					sb.WriteByte(' ')
+				}
+			} else {
+				sb.WriteString(cell)
+			}
+		}
+		if rowIdx < len(parsed)-1 {
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
+var reTableSeparator = regexp.MustCompile(`^[\s|:\-]+$`)
 
 var (
 	reInlineCodeHTML = regexp.MustCompile("`([^`]+)`")

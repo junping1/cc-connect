@@ -143,6 +143,7 @@ type Engine struct {
 	configReloadFunc func() (*ConfigReloadResult, error)
 
 	cronScheduler *CronScheduler
+	artifact      ArtifactServer
 
 	commands *CommandRegistry
 	skills   *SkillRegistry
@@ -280,6 +281,18 @@ func (e *Engine) SetProviderRemoveSaveFunc(fn func(string) error) {
 
 func (e *Engine) SetCronScheduler(cs *CronScheduler) {
 	e.cronScheduler = cs
+}
+
+// ArtifactServer is the interface the engine uses to share files via /share.
+type ArtifactServer interface {
+	// Allow registers a file for sharing and returns its public URL.
+	// If ttl <= 0, the server's default TTL is used.
+	Allow(path string, ttl int) (url string, err error)
+}
+
+// SetArtifactServer wires the artifact server into the engine.
+func (e *Engine) SetArtifactServer(srv ArtifactServer) {
+	e.artifact = srv
 }
 
 func (e *Engine) SetCommandSaveAddFunc(fn func(name, description, prompt, exec, workDir string) error) {
@@ -1007,6 +1020,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 	state.mu.Lock()
 	sp := newStreamPreview(e.streamPreview, state.platform, state.replyCtx, e.ctx)
+	activity := newToolActivityTracker(state.platform, state.replyCtx, e.ctx)
 	state.mu.Unlock()
 
 	// Idle timeout: 0 = disabled
@@ -1077,24 +1091,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		case EventThinking:
 			if !quiet && event.Content != "" {
 				sp.freeze()
-				preview := truncateIf(event.Content, e.display.ThinkingMaxLen)
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgThinking), preview))
+				activity.addThinking(event.Content)
 			}
 
 		case EventToolUse:
 			toolCount++
 			if !quiet {
 				sp.freeze()
-				inputPreview := truncateIf(event.ToolInput, e.display.ToolMaxLen)
-				// Use code block if content is long (>5 lines or >200 chars), otherwise inline code
-				lineCount := strings.Count(inputPreview, "\n") + 1
-				var formattedInput string
-				if lineCount > 5 || utf8.RuneCountInString(inputPreview) > 200 {
-					formattedInput = fmt.Sprintf("```\n%s\n```", inputPreview)
-				} else {
-					formattedInput = fmt.Sprintf("`%s`", inputPreview)
-				}
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput))
+				activity.addTool(event.ToolName, event.ToolInput)
 			}
 
 		case EventText:
@@ -1181,6 +1185,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				session.AgentSessionID = event.SessionID
 				session.mu.Unlock()
 			}
+
+			activity.finish()
 
 			fullResponse := event.Content
 			if fullResponse == "" && len(textParts) > 0 {
@@ -1447,6 +1453,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdShell(p, msg, raw)
 	case "tts":
 		e.cmdTTS(p, msg, args)
+	case "share":
+		e.cmdShare(p, msg, args)
 	default:
 		if custom, ok := e.commands.Resolve(cmd); ok {
 			e.executeCustomCommand(p, msg, custom, args)
@@ -5844,4 +5852,32 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 	}
 
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupOK), filepath.Base(filePath)))
+}
+
+// ──────────────────────────────────────────────────────────────
+// /share command
+// ──────────────────────────────────────────────────────────────
+
+func (e *Engine) cmdShare(p Platform, msg *Message, args []string) {
+	if e.artifact == nil {
+		e.reply(p, msg.ReplyCtx, "Artifact server is not enabled. Set [artifact] enabled = true in config.")
+		return
+	}
+	if len(args) == 0 {
+		e.reply(p, msg.ReplyCtx, "Usage: /share <filepath> [ttl_seconds]")
+		return
+	}
+	path := args[0]
+	ttl := 0
+	if len(args) >= 2 {
+		if n, err := strconv.Atoi(args[1]); err == nil && n > 0 {
+			ttl = n
+		}
+	}
+	url, err := e.artifact.Allow(path, ttl)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ share failed: %v", err))
+		return
+	}
+	e.reply(p, msg.ReplyCtx, url)
 }

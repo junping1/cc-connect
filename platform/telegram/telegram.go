@@ -555,13 +555,25 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 		return nil, fmt.Errorf("telegram: invalid reply context type %T", rctx)
 	}
 
-	msg := tgbotapi.NewMessage(rc.chatID, content)
-	msg.ParseMode = ""
+	html := core.MarkdownToTelegramHTML(content)
+	msg := tgbotapi.NewMessage(rc.chatID, html)
+	msg.ParseMode = tgbotapi.ModeHTML
 	sent, err := p.bot.Send(msg)
 	if err != nil {
-		return nil, fmt.Errorf("telegram: send preview: %w", err)
+		// Fallback to plain text
+		msg.Text = content
+		msg.ParseMode = ""
+		sent, err = p.bot.Send(msg)
+		if err != nil {
+			return nil, fmt.Errorf("telegram: send preview: %w", err)
+		}
 	}
 	return &telegramPreviewHandle{chatID: rc.chatID, messageID: sent.MessageID}, nil
+}
+
+// FormatThinking wraps text as a Telegram spoiler (hidden by default, tap to reveal).
+func (p *Platform) FormatThinking(text string) string {
+	return "||" + text + "||"
 }
 
 // UpdateMessage edits an existing message identified by previewHandle.

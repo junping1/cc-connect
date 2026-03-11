@@ -188,7 +188,7 @@ func (sp *streamPreview) flushLocked(text string) {
 			sp.previewMsgID = sp.replyCtx
 		}
 		sp.lastSentText = text
-		sp.lastSentViaUpdate = false
+		sp.lastSentViaUpdate = true // SendPreviewStart now uses HTML formatting like UpdateMessage
 		sp.lastSentAt = time.Now()
 		return
 	}

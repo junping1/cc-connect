@@ -172,9 +172,11 @@ func (t *toolActivityTracker) renderLocked() string {
 	}
 
 	var sb strings.Builder
-	for _, ev := range t.events {
+	i := 0
+	for i < len(t.events) {
+		ev := t.events[i]
 		if ev.kind == "thinking" {
-			// Each paragraph of thinking on its own italic line
+			// Italic paragraphs
 			paragraphs := strings.Split(strings.TrimSpace(ev.text), "\n\n")
 			for _, p := range paragraphs {
 				p = strings.TrimSpace(strings.ReplaceAll(p, "\n", " "))
@@ -185,28 +187,34 @@ func (t *toolActivityTracker) renderLocked() string {
 				sb.WriteString(p)
 				sb.WriteString("*\n\n")
 			}
+			i++
 		} else {
-			// Tool call
-			if ev.done {
-				sb.WriteString("✓ ")
-			} else {
-				sb.WriteString("→ ")
+			// Collect consecutive tool events into one code block
+			sb.WriteString("```\n")
+			for i < len(t.events) && t.events[i].kind == "tool" {
+				tool := t.events[i]
+				if tool.done {
+					sb.WriteString("✓ ")
+				} else {
+					sb.WriteString("→ ")
+				}
+				sb.WriteString(tool.text)
+				if tool.input != "" {
+					sb.WriteString(": ")
+					sb.WriteString(tool.input)
+				}
+				sb.WriteString("\n")
+				i++
 			}
-			sb.WriteString(ev.text)
-			if ev.input != "" {
-				sb.WriteString(": ")
-				sb.WriteString(ev.input)
-			}
-			sb.WriteString("\n")
+			sb.WriteString("```\n\n")
 		}
 	}
 
 	result := strings.TrimRight(sb.String(), "\n")
 
-	// If over Telegram's edit limit, trim oldest events from the top
+	// If over Telegram's edit limit, trim oldest content from the top
 	if len(result) > activityMaxChars {
 		result = "…\n" + result[len(result)-activityMaxChars:]
-		// Trim to next newline so we don't start mid-line
 		if idx := strings.Index(result, "\n"); idx >= 0 {
 			result = "…\n" + result[idx+1:]
 		}

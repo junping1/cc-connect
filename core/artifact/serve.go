@@ -15,6 +15,7 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
+	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	"github.com/yuin/goldmark/parser"
 	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 )
@@ -92,12 +93,32 @@ func serveMarkdown(w http.ResponseWriter, _ *http.Request, entry Entry) {
 		return
 	}
 
+	// Build Chroma CSS: dark as default, light scoped to [data-theme="light"]
+	darkStyle := styles.Get("github-dark")
+	if darkStyle == nil {
+		darkStyle = styles.Fallback
+	}
+	lightStyle := styles.Get("github")
+	if lightStyle == nil {
+		lightStyle = styles.Fallback
+	}
+	cssFormatter := chromahtml.New(chromahtml.WithClasses(true))
+	var darkBuf, lightBuf bytes.Buffer
+	_ = cssFormatter.WriteCSS(&darkBuf, darkStyle)
+	_ = cssFormatter.WriteCSS(&lightBuf, lightStyle)
+	lightScoped := strings.ReplaceAll(lightBuf.String(), ".chroma", "[data-theme=\"light\"] .chroma")
+	chromaCSS := darkBuf.String() + "\n" + lightScoped
+
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
 			extension.Table,
 			extension.Strikethrough,
 			extension.TaskList,
+			highlighting.NewHighlighting(
+				highlighting.WithStyle("github-dark"),
+				highlighting.WithGuessLanguage(true),
+			),
 		),
 		goldmark.WithParserOptions(
 			parser.WithAutoHeadingID(),
@@ -114,9 +135,13 @@ func serveMarkdown(w http.ResponseWriter, _ *http.Request, entry Entry) {
 		return
 	}
 
+	// Wrap tables for responsive horizontal scroll
+	bodyHTML := strings.ReplaceAll(body.String(), "<table>", `<div class="table-wrapper"><table>`)
+	bodyHTML = strings.ReplaceAll(bodyHTML, "</table>", "</table></div>")
+
 	stat, _ := os.Stat(entry.Path)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, markdownPage(filepath.Base(entry.Path), formatMeta(stat), body.String(), entry.Expires))
+	fmt.Fprint(w, markdownPage(filepath.Base(entry.Path), formatMeta(stat), chromaCSS, bodyHTML, entry.Expires))
 }
 
 func serveCode(w http.ResponseWriter, _ *http.Request, entry Entry, name string) {
@@ -210,7 +235,7 @@ func expiresLabel(t time.Time) string {
 
 // ── HTML templates ────────────────────────────────────────────────────────────
 
-func markdownPage(name, meta, body string, expires time.Time) string {
+func markdownPage(name, meta, chromaCSS, body string, expires time.Time) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -370,6 +395,7 @@ img { max-width: 100%%; height: auto; border-radius: 5px; }
   .md { max-width: 100%%; padding: 0; }
   .vf-footer { padding: 12pt 0 0; border-top: 1pt solid #ccc; }
 }
+%s
 </style>
 </head>
 <body>
@@ -425,7 +451,7 @@ img { max-width: 100%%; height: auto; border-radius: 5px; }
 </script>
 </body>
 </html>`,
-		html.EscapeString(name), body,
+		html.EscapeString(name), chromaCSS, body,
 		html.EscapeString(name), html.EscapeString(meta), expiresLabel(expires))
 }
 

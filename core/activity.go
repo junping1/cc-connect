@@ -176,15 +176,15 @@ func (t *toolActivityTracker) renderLocked() string {
 	for i < len(t.events) {
 		ev := t.events[i]
 		if ev.kind == "thinking" {
-			// Italic paragraphs
-			paragraphs := strings.Split(strings.TrimSpace(ev.text), "\n\n")
-			for _, p := range paragraphs {
-				p = strings.TrimSpace(strings.ReplaceAll(p, "\n", " "))
-				if p == "" {
-					continue
-				}
+			// Show a single truncated italic line
+			text := strings.TrimSpace(strings.ReplaceAll(ev.text, "\n", " "))
+			const maxThinking = 80
+			if len(text) > maxThinking {
+				text = text[:maxThinking] + "…"
+			}
+			if text != "" {
 				sb.WriteString("*")
-				sb.WriteString(p)
+				sb.WriteString(text)
 				sb.WriteString("*\n\n")
 			}
 			i++

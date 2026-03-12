@@ -68,7 +68,9 @@ func (t *toolActivityTracker) addThinking(text string) {
 	} else {
 		t.events = append(t.events, activityEvent{kind: "thinking", text: text})
 	}
-	if t.msgHandle != nil {
+	if t.msgHandle == nil {
+		t.updateLocked()
+	} else {
 		t.scheduleUpdateLocked()
 	}
 }
